@@ -142,7 +142,7 @@ typedef struct StudentNode {
 } StudentNode;
 
 /* -------------------------------------------------------------------------- */
-/* Title-index BST for sorted-by-title views (temporary, rebuilt as needed)   */
+/* Title-index BST for sorted-by-title views    */
 /* -------------------------------------------------------------------------- */
 
 typedef struct TitleNode {
@@ -238,6 +238,25 @@ static void print_date(Date d) {
 /* -------------------------------------------------------------------------- */
 /* Book BST                                                                   */
 /* -------------------------------------------------------------------------- */
+/*
+ * Binary search tree ordered by book_id:
+ *   - Left subtree:  all book_id < node.book_id
+ *   - Right subtree: all book_id > node.book_id
+ * Search: compare target id with node; go left, right, or stop (O(height)).
+ * Insert: walk like search; duplicate id is rejected; new Book lives in a new leaf.
+ *
+ * Delete (standard BST, no “holes” in the tree shape):
+ *   0 children → remove node, return NULL or the single side (splice out).
+ *   1 child    → replace this node by that child.
+ *   2 children → the “gap” at this node is filled by copying the **in-order
+ *                successor** here: the smallest book_id in the RIGHT subtree
+ *                (see book_min_node on root->right). That successor node is
+ *                then deleted recursively (it has at most one child).
+ *                So another book’s record **replaces** the deleted position’s
+ *                payload; we do NOT renumber IDs—that would break issues.dat.
+ * On disk, books.dat is rewritten by an **in-order walk** (sorted by id);
+ * the file is not a tree layout—there is no blank slot in the file.
+ */
 
 static BookNode *book_bst_search(BookNode *root, int book_id) {
     if (!root)
@@ -270,6 +289,7 @@ static BookNode *book_bst_insert(BookNode *root, Book b, int *err) {
     return root;
 }
 
+/* Smallest key in subtree = leftmost node; used as in-order successor for delete. */
 static BookNode *book_min_node(BookNode *n) {
     while (n && n->left)
         n = n->left;
@@ -285,6 +305,7 @@ static BookNode *book_bst_delete(BookNode *root, int book_id, int *found) {
         root->right = book_bst_delete(root->right, book_id, found);
     else {
         *found = 1;
+        /* Case 1–2: zero or one child — lift the non-empty side (or NULL). */
         if (!root->left) {
             BookNode *t = root->right;
             free(root);
@@ -295,6 +316,10 @@ static BookNode *book_bst_delete(BookNode *root, int book_id, int *found) {
             free(root);
             return t;
         }
+        /*
+         * Case 3: two children — copy successor’s Book into this node, then
+         * delete the successor from the right subtree (proper BST shrink).
+         */
         BookNode *succ = book_min_node(root->right);
         root->data = succ->data;
         int f = 0;
@@ -491,6 +516,12 @@ static void title_bst_free(TitleNode *root) {
 /* -------------------------------------------------------------------------- */
 /* Issue queue (active loans)                                                 */
 /* -------------------------------------------------------------------------- */
+/*
+ * Queue = singly linked FIFO: issue_front (head) … issue_rear (tail).
+ * Enqueue appends at rear; “who has which book” is scanned linearly.
+ * Order can represent loan timeline for display; return removes one matching
+ * (student_id, book_id) anywhere in the list, then rear pointer is repaired.
+ */
 
 static void issue_queue_repair_rear(LibraryCtx *ctx);
 
@@ -575,6 +606,10 @@ static void issue_queue_save(FILE *fp, LibraryCtx *ctx) {
 /* -------------------------------------------------------------------------- */
 /* Waitlist queue                                                             */
 /* -------------------------------------------------------------------------- */
+/*
+ * When no copy is available, (student_id, book_id) joins the same FIFO idea:
+ * first to wait is first served when a copy is returned (see try_process_waitlist).
+ */
 
 static void wait_repair_rear(LibraryCtx *ctx) {
     if (!ctx->wait_front) {
